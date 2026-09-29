@@ -1,3 +1,6 @@
+> [!NOTE]
+> **Status:** This project is inactive and no longer updated.
+
 ![](web/screenshot.png)
 
 Four people talk at once in a reverberant room. Tap one, hear mostly that one.
