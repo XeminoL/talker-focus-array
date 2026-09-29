@@ -16,8 +16,6 @@ Four people talk at once in a reverberant room. Tap one, hear mostly that one.
 |---|---|---|---|---|
 | 21.7% | 12.1% | 20.5 | 2 | 122.88 MHz, met |
 
-No board. Room, microphones and voices are simulated. Every RTL block is compared bit for bit with the Python model in `model/`.
-
     pip install -r requirements.txt
     cd scene && python build.py && python pdm_build.py
     cd ../host && make design_weights
