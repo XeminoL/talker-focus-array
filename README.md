@@ -22,6 +22,4 @@ Four people talk at once in a reverberant room. Tap one, hear mostly that one.
     cd ../model && python frontend.py && python focus_check.py
     cd ../web && python make_demo.py
 
-`host/` and the checks run under WSL (g++, iverilog). `synth/top.tcl` is the Vivado batch script. Open `web/index.html` to listen.
-
 Speech: CMU ARCTIC bdl, slt, rms, clb, see `data/speech/COPYING`. Clips in `web/data/` are processed from it.
