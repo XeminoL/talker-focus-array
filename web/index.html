@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>talker-focus-array</title>
+<meta name="description" content="Pick one talker in a reverberant room and hear what a 64-microphone FPGA array keeps of that voice.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23202522'/%3E%3Cg fill='%23d8c9a3'%3E%3Crect x='3' y='3' width='2' height='2'/%3E%3Crect x='7' y='3' width='2' height='2'/%3E%3Crect x='11' y='3' width='2' height='2'/%3E%3Crect x='3' y='7' width='2' height='2'/%3E%3Crect x='7' y='7' width='2' height='2'/%3E%3Crect x='11' y='7' width='2' height='2'/%3E%3Crect x='3' y='11' width='2' height='2'/%3E%3Crect x='7' y='11' width='2' height='2'/%3E%3Crect x='11' y='11' width='2' height='2'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root {
+  --floor: #202522;
+  --wall: #8a8f86;
+  --ink: #e6e2d6;
+  --dim: #9a9c93;
+  --mic: #d8c9a3;
+  --pick: #e3a24a;
+  --talker: #7fa7a1;
+  --beam: rgba(227, 162, 74, 0.22);
+  --panel: #171a18;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow-x: hidden; background: var(--floor); color: var(--ink); font: 15px/1.4 Georgia, "Times New Roman", serif; }
+body { display: grid; grid-template-columns: 1fr 300px; grid-template-rows: auto 1fr; height: 100vh; }
+header { grid-column: 1 / 3; display: flex; align-items: baseline; gap: 18px; padding: 10px 16px; border-bottom: 1px solid #333833; }
+h1 { font-size: 17px; font-weight: normal; letter-spacing: 0.02em; }
+.scenes { display: flex; gap: 6px; margin-left: auto; }
+button { font: inherit; color: var(--ink); background: transparent; border: 1px solid #4a4f49; padding: 3px 10px; cursor: pointer; }
+button.on { border-color: var(--pick); color: var(--pick); }
+#stage { position: relative; min-height: 0; }
+svg { width: 100%; height: 100%; display: block; }
+aside { background: var(--panel); border-left: 1px solid #333833; padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
+.who { font-size: 20px; }
+.where { color: var(--dim); font-size: 13px; }
+.listen { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.listen button { text-align: left; display: grid; grid-template-columns: 112px 1fr 42px; align-items: center; gap: 8px; padding: 7px 8px; }
+.bar { height: 8px; background: #2c302c; position: relative; }
+.bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--mic); }
+.listen button.on .bar span { background: var(--pick); }
+.value { font-family: ui-monospace, Consolas, monospace; font-size: 13px; text-align: right; }
+.state { color: var(--dim); font-size: 13px; min-height: 18px; }
+.verdict { font-size: 14px; }
+.verdict.low { color: #c98f7c; }
+.note { color: var(--dim); font-size: 12px; margin-top: auto; }
+.label { fill: var(--ink); font-family: Georgia, serif; font-size: 0.3px; }
+.small { fill: var(--dim); font-family: Georgia, serif; font-size: 0.24px; }
+@media (max-width: 760px) {
+  body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 55vh auto; height: auto; }
+  header { grid-column: 1; flex-wrap: wrap; }
+  .scenes { margin-left: 0; flex-wrap: wrap; }
+  aside { border-left: none; border-top: 1px solid #333833; min-width: 0; }
+  .listen button { grid-template-columns: 112px minmax(0, 1fr) 42px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>talker-focus-array</h1>
+  <div class="scenes" id="scenes"></div>
+</header>
+<div id="stage"><svg id="room" role="img" aria-label="Top view of the room with the microphone array and four talkers"></svg></div>
+<aside>
+  <div>
+    <div class="who" id="who">-</div>
+    <div class="where" id="where">tap a talker</div>
+  </div>
+  <div class="listen" id="listen"></div>
+  <div class="state" id="state"></div>
+  <div class="verdict" id="verdict"></div>
+  <div class="note">Simulated room, 10 x 8 x 3.5 m, reverberation 1.8 s. Four people talk at once. The audio is the bit-exact output of the RTL pipeline: 64 PDM microphones, CIC, FIR, then filter-and-sum. STOI is measured against the dry voice. No hardware was used.</div>
+</aside>
+<audio id="player" preload="none"></audio>
+<script src="data/demo.js"></script>
+<script>
+const demo = window.DEMO;
+const svg = document.getElementById("room");
+const player = document.getElementById("player");
+const methods = [["mic", "1 microphone"], ["das", "delay-and-sum"], ["mpdr", "MPDR"]];
+const margin = 0.6;
+let scene = demo.scenes[1];
+let talker = 0;
+let method = "das";
+
+function el(name, attrs, parent) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  (parent || svg).appendChild(node);
+  return node;
+}
+
+function clip() {
+  return method === "mic" ? `data/${scene.id}_mic.wav` : `data/${scene.id}_t${talker}_${method}.wav`;
+}
+
+function drawRoom() {
+  svg.innerHTML = "";
+  const [w, h] = demo.room;
+  svg.setAttribute("viewBox", `${-margin} ${-margin} ${w + 2 * margin} ${h + 2 * margin}`);
+  const g = el("g", { transform: `translate(0 ${h}) scale(1 -1)` });
+  el("rect", { x: 0, y: 0, width: w, height: h, fill: "none", stroke: "var(--wall)", "stroke-width": 0.05 }, g);
+  for (let x = 1; x < w; x++) el("line", { x1: x, y1: 0, x2: x, y2: h, stroke: "#2a2f2b", "stroke-width": 0.01 }, g);
+  for (let y = 1; y < h; y++) el("line", { x1: 0, y1: y, x2: w, y2: y, stroke: "#2a2f2b", "stroke-width": 0.01 }, g);
+  const xs = demo.mics.map(p => p[0]), ys = demo.mics.map(p => p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const t = scene.talkers[talker].position;
+  const angle = Math.atan2(t[1] - cy, t[0] - cx);
+  const spread = method === "mic" ? Math.PI : 0.09 + 0.25 / Math.hypot(t[0] - cx, t[1] - cy);
+  const reach = 14;
+  if (method !== "mic") {
+    const a = [cx + reach * Math.cos(angle - spread), cy + reach * Math.sin(angle - spread)];
+    const b = [cx + reach * Math.cos(angle + spread), cy + reach * Math.sin(angle + spread)];
+    const clipPath = el("clipPath", { id: "inside" }, g);
+    el("rect", { x: 0, y: 0, width: w, height: h }, clipPath);
+    el("polygon", { points: `${cx},${cy} ${a.join(",")} ${b.join(",")}`, fill: "var(--beam)", "clip-path": "url(#inside)" }, g);
+  }
+  for (const [x, y] of demo.mics) el("rect", { x: x - 0.012, y: y - 0.012, width: 0.024, height: 0.024, fill: "var(--mic)" }, g);
+  scene.talkers.forEach((person, index) => {
+    const [x, y] = person.position;
+    const picked = index === talker;
+    const dot = el("circle", { cx: x, cy: y, r: 0.22, fill: picked ? "var(--pick)" : "var(--talker)", cursor: "pointer" }, g);
+    dot.addEventListener("click", () => { talker = index; refresh(true); });
+    const label = el("text", { x: x + 0.32, y: h - y + 0.08, class: "label" });
+    label.textContent = person.name;
+    label.style.cursor = "pointer";
+    label.addEventListener("click", () => { talker = index; refresh(true); });
+  });
+  const tag = el("text", { x: cx - 0.35, y: h - cy + 0.08, class: "small", "text-anchor": "end" });
+  tag.textContent = "64 mics, 42 x 42 cm";
+  const scale = el("text", { x: 0, y: h + 0.45, class: "small" });
+  scale.textContent = "grid 1 m";
+}
+
+function drawPanel() {
+  const person = scene.talkers[talker];
+  const [x, y] = person.position;
+  const centre = demo.mics.reduce((s, p) => [s[0] + p[0] / demo.mics.length, s[1] + p[1] / demo.mics.length], [0, 0]);
+  const range = Math.hypot(x - centre[0], y - centre[1]);
+  document.getElementById("who").textContent = person.name;
+  document.getElementById("where").textContent = `${range.toFixed(1)} m from the array` + (talker === 0 ? ", the far talker" : ", close to the array");
+  const list = document.getElementById("listen");
+  list.innerHTML = "";
+  for (const [key, name] of methods) {
+    const value = person.stoi[key];
+    const button = document.createElement("button");
+    if (key === method) button.className = "on";
+    button.innerHTML = `<span>${name}</span><span class="bar"><span style="width:${(value * 100).toFixed(0)}%"></span></span><span class="value">${value.toFixed(2)}</span>`;
+    button.addEventListener("click", () => { method = key; refresh(true); });
+    list.appendChild(button);
+  }
+  const gain = person.stoi.mpdr - person.stoi.mic;
+  const verdict = document.getElementById("verdict");
+  if (gain < 0.05) {
+    verdict.className = "verdict low";
+    verdict.textContent = `No useful gain for ${person.name} (+${gain.toFixed(2)} STOI).`;
+  } else {
+    verdict.className = "verdict";
+    verdict.textContent = `STOI ${person.stoi.mic.toFixed(2)} with one microphone, ${person.stoi.mpdr.toFixed(2)} with the array.`;
+  }
+}
+
+function refresh(play) {
+  drawRoom();
+  drawPanel();
+  const state = document.getElementById("state");
+  if (!play) { state.textContent = ""; return; }
+  player.src = clip();
+  state.textContent = "loading";
+  player.play().then(() => { state.textContent = "playing"; }).catch(() => { state.textContent = "press again to play"; });
+}
+
+player.addEventListener("ended", () => { document.getElementById("state").textContent = ""; });
+player.addEventListener("error", () => { document.getElementById("state").textContent = "audio file missing"; });
+
+const bar = document.getElementById("scenes");
+demo.scenes.forEach(s => {
+  const b = document.createElement("button");
+  b.textContent = `far talker ${s.distance} m`;
+  b.addEventListener("click", () => {
+    scene = s;
+    [...bar.children].forEach(c => c.classList.toggle("on", c === b));
+    refresh(false);
+  });
+  if (s === scene) b.className = "on";
+  bar.appendChild(b);
+});
+const wanted = new URLSearchParams(location.hash.slice(1));
+if (wanted.has("scene")) {
+  const found = demo.scenes.find(s => s.id === wanted.get("scene"));
+  if (found) {
+    scene = found;
+    [...bar.children].forEach((c, i) => c.classList.toggle("on", demo.scenes[i] === found));
+  }
+}
+if (wanted.has("talker")) talker = Math.min(3, Math.max(0, parseInt(wanted.get("talker"), 10) || 0));
+if (wanted.has("method") && methods.some(m => m[0] === wanted.get("method"))) method = wanted.get("method");
+refresh(false);
+</script>
+</body>
+</html>

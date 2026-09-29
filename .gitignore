@@ -1,0 +1,8 @@
+__pycache__/
+build/
+data/scenes/
+data/frontend/
+host/design_weights
+host/design_weights_check
+*.log
+.Xil/
